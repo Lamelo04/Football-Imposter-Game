@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#10170f" />
+  <meta name="description" content="A football guessing game for your whole group. Find the imposter." />
+  <title>Offside — Football Undercover</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="grain"></div>
+  <header class="topbar"><a class="brand" href="/"><span class="brand-mark">O</span> OFFSIDE</a><span class="top-note"><span class="live-dot"></span> FOOTBALL UNDERCOVER</span></header>
+  <main id="app" class="shell">
+    <section class="hero" id="welcome">
+      <div class="eyebrow"><span class="eyebrow-line"></span> THE BEAUTIFUL GAME, WITH A TWIST</div>
+      <h1>One of you<br/>is <span class="accent">offside.</span></h1>
+      <p class="intro">Everyone gets the same footballer. Well, almost everyone. Give a clue, read the room, and find the imposter.</p>
+      <div class="ball-art" aria-hidden="true"><div class="ball"><div class="pentagon"></div><i></i><i></i><i></i><i></i><i></i></div><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><span class="spark spark-a">✳</span><span class="spark spark-b">✦</span></div>
+      <div class="entry-grid">
+        <article class="entry-card host-card"><div class="card-number">01 <span>HOST A GAME</span></div><h2>Make a room</h2><label for="host-name">YOUR NAME</label><input id="host-name" maxlength="18" placeholder="e.g. Alex" autocomplete="nickname"/><button id="create-btn" class="button button-primary">Create room <span>↗</span></button></article>
+        <article class="entry-card join-card"><div class="card-number">02 <span>JOIN YOUR FRIENDS</span></div><h2>Got a code?</h2><label for="join-name">YOUR NAME</label><input id="join-name" maxlength="18" placeholder="e.g. Sam" autocomplete="nickname"/><label for="room-code" class="code-label">ROOM CODE</label><input id="room-code" class="room-code-input" maxlength="5" placeholder="ABCDE" autocomplete="off"/><button id="join-btn" class="button button-ghost">Join the game <span>→</span></button></article>
+      </div>
+      <div class="how-line"><span>3–16 PLAYERS</span><i></i><span>ONE PHONE EACH</span><i></i><span>NO APP DOWNLOAD</span></div>
+    </section>
+    <section id="room" class="room-view hidden"></section>
+  </main>
+  <footer><span>OFFSIDE <span class="footer-dot">●</span> A LITTLE FOOTBALL. A LOT OF SUSPICION.</span><span>MADE FOR MATCH DAY</span></footer>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: offside-football-undercover
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
