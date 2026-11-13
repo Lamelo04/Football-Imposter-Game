@@ -7,6 +7,7 @@ let roomState = null;
 let roleInfo = null;
 let voteConfirmed = false;
 let selectedVote = null;
+let wasEliminated = false;
 let toastTimer;
 
 function notify(message) {
@@ -107,7 +108,7 @@ function renderRoom() {
       summary = 'That player was not the imposter. The game continues with ' + result.remainingPlayers + ' players.';
     }
     const canContinue = !result.gameOver && roomState.players.length > 2;
-    const control = canContinue ? (host ? '<button class="button button-primary" id="next-round">Next round <span>↗</span></button>' : '<div class="wait-note">The host will start the next round. The same imposter stays in the game.</div>') : '<div class="wait-note">Game over. Start a new room to play again.</div>';
+    const control = canContinue ? (host ? '<button class="button button-primary" id="next-round">Next round <span>↗</span></button>' : '<div class="wait-note">The host will start the next round. The same imposter stays in the game.</div>') : result.gameOver ? (host ? '<button class="button button-primary" id="new-game">Start a new game <span>↗</span></button>' : '<div class="wait-note">The room owner can start a new game with fresh roles.</div>') : '<div class="wait-note">Game over. Start a new room to play again.</div>';
     const revealImposter = result.gameOver ? '<div class="role-label">THE IMPOSTER WAS</div><div class="result-name">' + escapeHtml(result.imposter || 'Unknown') + '</div>' : '';
     main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>' + (result.gameOver ? 'FINAL RESULT' : 'ROUND RESULT') + '</span><span class="badge">' + (result.gameOver ? 'FULL TIME' : 'NEXT ROUND') + '</span></div><div class="result"><div class="role-label">' + (result.caught ? 'IMPOSTER CAUGHT' : result.imposterWon ? 'IMPOSTER SURVIVED' : result.tie ? 'NO ELIMINATION' : 'PLAYER ELIMINATED') + '</div><h3>' + verdict + '</h3><p class="side-copy">' + summary + '</p>' + revealImposter + '<div class="role-label" style="margin-top:18px">THIS ROUND’S FOOTBALLER</div><div class="result-name">' + escapeHtml(result.footballer || 'Unknown') + '</div></div>' + control + '</div><aside class="side-panel"><div class="panel-top"><span>' + (result.gameOver ? 'FINAL WHISTLE' : 'THE GAME CONTINUES') + '</span></div><h3 class="phase-title">' + (result.gameOver ? 'Match complete.' : 'Same imposter. New player.') + '</h3><p class="side-copy">' + (result.gameOver ? 'The imposter has been revealed.' : 'A new footballer and a fresh speaking order are dealt each round. The imposter stays secret.') + '</p></aside></div>';
   }
@@ -119,6 +120,7 @@ function renderRoom() {
   document.querySelectorAll('[data-vote]').forEach((button) => button.addEventListener('click', () => { selectedVote = button.dataset.vote; renderRoom(); }));
   document.querySelector('#confirm-vote')?.addEventListener('click', () => { socket.emit('game:vote', { targetId: selectedVote }); });
   document.querySelector('#next-round')?.addEventListener('click', () => { roleInfo = null; voteConfirmed = false; selectedVote = null; socket.emit('game:phase', { phase: 'hints' }); });
+  document.querySelector('#new-game')?.addEventListener('click', () => { roleInfo = null; voteConfirmed = false; selectedVote = null; socket.emit('game:new'); });
 }
 
 document.querySelector('#create-btn').addEventListener('click', createRoom);
@@ -128,10 +130,18 @@ document.querySelector('#host-name').addEventListener('keydown', (event) => { if
 document.querySelector('#join-name').addEventListener('keydown', (event) => { if (event.key === 'Enter') joinRoom(); });
 document.querySelector('#room-code').addEventListener('keydown', (event) => { if (event.key === 'Enter') joinRoom(); });
 socket.on('room:update', (state) => { roomState = state; renderRoom(); });
-socket.on('game:role', (role) => { roleInfo = role; voteConfirmed = false; selectedVote = null; renderRoom(); });
+socket.on('game:role', (role) => {
+  roleInfo = role;
+  voteConfirmed = false;
+  selectedVote = null;
+  if (wasEliminated) {
+    wasEliminated = false;
+    showRoom(sessionStorage.getItem('offside-room') || '');
+  } else renderRoom();
+});
 socket.on('vote:confirmed', () => { voteConfirmed = true; renderRoom(); });
 socket.on('game:error', notify);
 socket.on('game:eliminated', ({ name } = {}) => {
-  sessionStorage.removeItem('offside-room');
+  wasEliminated = true;
   roomView.innerHTML = '<div class="eliminated-screen"><div class="room-kicker">VOTE RESULT</div><h1>' + escapeHtml(name || 'You') + ' <span class="accent">are out.</span></h1><p>You were voted out. The match continues without you.</p><button class="button button-primary" onclick="window.location.reload()">Back to home <span>↗</span></button></div>';
 });

@@ -72,7 +72,7 @@ io.on('connection', (socket) => {
     const playerName = cleanName(name);
     if (!playerName) return done({ error: 'Enter your name first.' });
     const code = makeCode();
-    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterId: null, imposterCanStartFirst: false };
+    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), eliminatedPlayers: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterId: null, imposterCanStartFirst: false };
     room.players.set(socket.id, { id: socket.id, name: playerName, connected: true });
     rooms.set(code, room);
     socket.join(code);
@@ -136,6 +136,7 @@ io.on('connection', (socket) => {
       if (votedPlayer && !caught) {
         eliminated = votedPlayer.name;
         io.to(votedPlayer.id).emit('game:eliminated', { name: votedPlayer.name });
+        room.eliminatedPlayers.set(votedPlayer.id, votedPlayer);
         io.sockets.sockets.get(votedPlayer.id)?.leave(room.code);
         room.players.delete(votedPlayer.id);
         if (room.hostId === votedPlayer.id) room.hostId = players(room)[0]?.id;
@@ -165,6 +166,22 @@ io.on('connection', (socket) => {
       startRound(room);
       sendRoom(room);
     }
+  });
+
+  socket.on('game:new', () => {
+    const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
+    if (!room || room.hostId !== socket.id || room.phase !== 'result' || !room.result?.gameOver) return;
+    for (const [playerId, player] of room.eliminatedPlayers) {
+      const eliminatedSocket = io.sockets.sockets.get(playerId);
+      if (!eliminatedSocket) continue;
+      room.players.set(playerId, { ...player, role: undefined, connected: true });
+      eliminatedSocket.join(room.code);
+    }
+    room.eliminatedPlayers.clear();
+    if (players(room).length < 3) return socket.emit('game:error', 'At least 3 players need to be connected to start a new game.');
+    room.imposterId = null;
+    startRound(room);
+    sendRoom(room);
   });
 
   socket.on('disconnect', () => {
