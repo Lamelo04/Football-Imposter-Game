@@ -8,6 +8,7 @@ let roleInfo = null;
 let voteConfirmed = false;
 let selectedVote = null;
 let wasEliminated = false;
+let guessSubmitted = false;
 let toastTimer;
 
 function notify(message) {
@@ -94,9 +95,12 @@ function renderRoom() {
     const result = roomState.result || {};
     let verdict;
     let summary;
-    if (result.caught) {
+    if (result.guessCorrect) {
+      verdict = 'The imposter guessed correctly!';
+      summary = 'The footballer was ' + escapeHtml(result.footballer || 'the secret player') + '. The imposter wins.';
+    } else if (result.caught) {
       verdict = 'The imposter was caught!';
-      summary = 'The group voted out the imposter. The game is over.';
+      summary = result.guessCorrect === false ? 'The imposter guessed the wrong footballer. The group wins.' : 'The group voted out the imposter. The game is over.';
     } else if (result.imposterWon) {
       verdict = 'The imposter wins.';
       summary = 'Only two players remain. The imposter has survived until the final two.';
@@ -110,7 +114,14 @@ function renderRoom() {
     const canContinue = !result.gameOver && roomState.players.length > 2;
     const control = canContinue ? (host ? '<button class="button button-primary" id="next-round">Next round <span>↗</span></button>' : '<div class="wait-note">The host will start the next round. The imposter and footballer stay the same.</div>') : result.gameOver ? (host ? '<button class="button button-primary" id="new-game">Start a new game <span>↗</span></button>' : '<div class="wait-note">The room owner can start a new game with a new footballer and fresh roles.</div>') : '<div class="wait-note">Game over. Start a new room to play again.</div>';
     const revealImposter = result.gameOver ? '<div class="role-label">THE IMPOSTER WAS</div><div class="result-name">' + escapeHtml(result.imposter || 'Unknown') + '</div>' : '';
-    main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>' + (result.gameOver ? 'FINAL RESULT' : 'ROUND RESULT') + '</span><span class="badge">' + (result.gameOver ? 'FULL TIME' : 'NEXT ROUND') + '</span></div><div class="result"><div class="role-label">' + (result.caught ? 'IMPOSTER CAUGHT' : result.imposterWon ? 'IMPOSTER SURVIVED' : result.tie ? 'NO ELIMINATION' : 'PLAYER ELIMINATED') + '</div><h3>' + verdict + '</h3><p class="side-copy">' + summary + '</p>' + revealImposter + '<div class="role-label" style="margin-top:18px">THIS ROUND’S FOOTBALLER</div><div class="result-name">' + escapeHtml(result.footballer || 'Unknown') + '</div></div>' + control + '</div><aside class="side-panel"><div class="panel-top"><span>' + (result.gameOver ? 'FINAL WHISTLE' : 'THE GAME CONTINUES') + '</span></div><h3 class="phase-title">' + (result.gameOver ? 'Match complete.' : 'Same imposter. Same footballer.') + '</h3><p class="side-copy">' + (result.gameOver ? 'The imposter has been revealed. The room owner can start a new game with a fresh footballer and new roles.' : 'The footballer and imposter stay the same. The speaking order reshuffles for the next vote.') + '</p></aside></div>';
+    main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>' + (result.gameOver ? 'FINAL RESULT' : 'ROUND RESULT') + '</span><span class="badge">' + (result.gameOver ? 'FULL TIME' : 'NEXT ROUND') + '</span></div><div class="result"><div class="role-label">' + (result.guessCorrect ? 'CORRECT FINAL GUESS' : result.caught ? 'IMPOSTER CAUGHT' : result.imposterWon ? 'IMPOSTER SURVIVED' : result.tie ? 'NO ELIMINATION' : 'PLAYER ELIMINATED') + '</div><h3>' + verdict + '</h3><p class="side-copy">' + summary + '</p>' + revealImposter + '<div class="role-label" style="margin-top:18px">THIS ROUND’S FOOTBALLER</div><div class="result-name">' + escapeHtml(result.footballer || 'Unknown') + '</div></div>' + control + '</div><aside class="side-panel"><div class="panel-top"><span>' + (result.gameOver ? 'FINAL WHISTLE' : 'THE GAME CONTINUES') + '</span></div><h3 class="phase-title">' + (result.gameOver ? 'Match complete.' : 'Same imposter. Same footballer.') + '</h3><p class="side-copy">' + (result.gameOver ? 'The imposter has been revealed. The room owner can start a new game with a fresh footballer and new roles.' : 'The footballer and imposter stay the same. The speaking order reshuffles for the next vote.') + '</p></aside></div>';
+  }
+  if (roomState.phase === 'guess') {
+    const isImposter = roleInfo?.role === 'imposter';
+    const guessContent = isImposter
+      ? (guessSubmitted ? '<div class="wait-note">Guess locked. Waiting for the result…</div>' : '<p class="side-copy">The group caught you. Name the footballer correctly to steal the win.</p><label class="guess-label" for="imposter-guess">YOUR FINAL GUESS</label><input class="guess-input" id="imposter-guess" maxlength="40" placeholder="Footballer’s name" autocomplete="off"><button class="button button-primary" id="submit-imposter-guess">Lock in my guess <span>↗</span></button>')
+      : '<div class="guess-callout"><div class="role-label">THE IMPOSTER WAS CAUGHT</div><h3 class="phase-title">One last chance.</h3><p class="side-copy">The imposter gets one private guess at the footballer. The game ends after their answer.</p></div>';
+    main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>FINAL IMPOSTER GUESS</span><span class="badge">ONE CHANCE</span></div><div class="result"><h3>' + (isImposter ? 'Can you name the player?' : 'Waiting for the guess…') + '</h3>' + guessContent + '</div></div><aside class="side-panel"><div class="panel-top"><span>THE LAST PLAY</span></div><h3 class="phase-title">' + (isImposter ? 'Make it count.' : 'Keep the secret.') + '</h3><p class="side-copy">' + (isImposter ? 'Enter the footballer’s full name. A correct answer wins you the game.' : 'The imposter is entering one final guess. The footballer stays hidden until they answer.') + '</p></aside></div>';
   }
   document.querySelector('#room-content').innerHTML = main;
   document.querySelector('#start-game')?.addEventListener('click', () => socket.emit('game:start'));
@@ -121,6 +132,16 @@ function renderRoom() {
   document.querySelector('#confirm-vote')?.addEventListener('click', () => { socket.emit('game:vote', { targetId: selectedVote }); });
   document.querySelector('#next-round')?.addEventListener('click', () => { roleInfo = null; voteConfirmed = false; selectedVote = null; socket.emit('game:phase', { phase: 'hints' }); });
   document.querySelector('#new-game')?.addEventListener('click', () => { roleInfo = null; voteConfirmed = false; selectedVote = null; socket.emit('game:new'); });
+  document.querySelector('#submit-imposter-guess')?.addEventListener('click', () => {
+    const footballer = document.querySelector('#imposter-guess')?.value.trim();
+    if (!footballer) return notify('Enter your guess first.');
+    guessSubmitted = true;
+    renderRoom();
+    socket.emit('game:guess', { footballer });
+  });
+  document.querySelector('#imposter-guess')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') document.querySelector('#submit-imposter-guess')?.click();
+  });
 }
 
 document.querySelector('#create-btn').addEventListener('click', createRoom);
@@ -134,6 +155,7 @@ socket.on('game:role', (role) => {
   roleInfo = role;
   voteConfirmed = false;
   selectedVote = null;
+  guessSubmitted = false;
   if (wasEliminated) {
     wasEliminated = false;
     showRoom(sessionStorage.getItem('offside-room') || '');

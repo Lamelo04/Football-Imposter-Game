@@ -24,7 +24,9 @@ const publicRoom = (room) => ({
   speakerIndex: room.speakerIndex ?? 0,
   votes: room.votes.size,
   voteCount: room.phase === 'voting' ? players(room).length : undefined,
-  result: room.phase === 'result' ? room.result : undefined,
+  result: room.phase === 'result' || room.phase === 'guess'
+    ? { ...room.result, footballer: room.phase === 'guess' ? null : room.result?.footballer }
+    : undefined,
 });
 const sendRoom = (room) => io.to(room.code).emit('room:update', publicRoom(room));
 const sendPrivateRole = (socket, room) => {
@@ -145,19 +147,32 @@ io.on('connection', (socket) => {
         votedPlayer.eliminated = true;
         io.to(votedPlayer.id).emit('game:eliminated', { name: votedPlayer.name });
       }
-      const gameOver = caught || (!tie && players(room).length === 2);
-      room.result = {
-        caught,
-        tie,
-        gameOver,
-        imposterWon: gameOver && !caught,
-        eliminated,
-        votedOut: votedPlayer?.name || null,
-        imposter: gameOver ? players(room).find((player) => player.id === room.imposterId)?.name : null,
-        footballer: room.footballer,
-        remainingPlayers: players(room).length,
-      };
-      room.phase = 'result';
+      if (caught) {
+        room.result = {
+          caught: true,
+          tie: false,
+          gameOver: false,
+          guessPending: true,
+          imposter: votedPlayer.name,
+          footballer: null,
+          remainingPlayers: players(room).length,
+        };
+        room.phase = 'guess';
+      } else {
+        const gameOver = !tie && players(room).length === 2;
+        room.result = {
+          caught: false,
+          tie,
+          gameOver,
+          imposterWon: gameOver,
+          eliminated,
+          votedOut: votedPlayer?.name || null,
+          imposter: gameOver ? players(room).find((player) => player.id === room.imposterId)?.name : null,
+          footballer: room.footballer,
+          remainingPlayers: players(room).length,
+        };
+        room.phase = 'result';
+      }
     }
     sendRoom(room);
   });
@@ -170,6 +185,25 @@ io.on('connection', (socket) => {
       startRound(room);
       sendRoom(room);
     }
+  });
+
+  socket.on('game:guess', ({ footballer } = {}) => {
+    const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
+    if (!room || room.phase !== 'guess' || socket.id !== room.imposterId) return;
+    const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const correct = normalize(footballer) === normalize(room.footballer);
+    room.result = {
+      caught: !correct,
+      guessCorrect: correct,
+      gameOver: true,
+      imposterWon: correct,
+      tie: false,
+      imposter: room.players.get(room.imposterId)?.name,
+      footballer: room.footballer,
+      remainingPlayers: players(room).length,
+    };
+    room.phase = 'result';
+    sendRoom(room);
   });
 
   socket.on('game:new', () => {
