@@ -26,5 +26,5 @@ Rooms live in server memory and are cleared when the server restarts. Keep one s
 3. The host can allow the imposter to speak first. Otherwise, the imposter is never first in the randomized speaking order.
 4. Each player sees their role privately. Everyone but the imposter sees that round's footballer.
 5. Take turns giving one verbal clue, then vote privately.
-6. If the imposter is caught, the game ends. If an innocent player is voted out, they leave the game and a new round starts with a new footballer and the same imposter. The imposter wins when only two players remain.
-7. After a game ends, the host can start a new game with a new footballer and freshly assigned roles. Eliminated players who still have the game open are brought back in.
+6. If the imposter is caught, the game ends. If an innocent player is voted out, they are removed from play and the game continues with the same footballer and imposter. The imposter wins when only two active players remain.
+7. The room owner keeps control even if voted out. After a game ends, they can start a new game with a different footballer and freshly assigned roles; eliminated players who are still connected return.

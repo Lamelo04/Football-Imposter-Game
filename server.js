@@ -12,7 +12,8 @@ const rooms = new Map();
 app.use(express.static('public'));
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-const players = (room) => [...room.players.values()];
+const allPlayers = (room) => [...room.players.values()];
+const players = (room) => allPlayers(room).filter((player) => !player.eliminated);
 const publicRoom = (room) => ({
   code: room.code,
   phase: room.phase,
@@ -46,13 +47,19 @@ const shuffled = (items) => {
   }
   return result;
 };
-const startRound = (room) => {
+const startRound = (room, { newGame = false } = {}) => {
   room.phase = 'hints';
   room.votes.clear();
   room.result = null;
-  const nextFootballers = FOOTBALLERS.filter((name) => name !== room.footballer);
-  room.footballer = nextFootballers[randomInt(nextFootballers.length)];
-  if (!room.imposterId || !room.players.has(room.imposterId)) {
+  if (newGame || !room.footballer) {
+    const nextFootballers = FOOTBALLERS.filter((name) => name !== room.footballer);
+    room.footballer = nextFootballers[randomInt(nextFootballers.length)];
+  }
+  if (newGame) {
+    for (const player of allPlayers(room)) player.eliminated = !player.connected;
+    room.imposterId = null;
+  }
+  if (!room.imposterId || !room.players.has(room.imposterId) || room.players.get(room.imposterId).eliminated) {
     room.imposterId = players(room)[randomInt(players(room).length)].id;
   }
   room.speakingOrder = shuffled(players(room).map((player) => player.id));
@@ -72,8 +79,8 @@ io.on('connection', (socket) => {
     const playerName = cleanName(name);
     if (!playerName) return done({ error: 'Enter your name first.' });
     const code = makeCode();
-    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), eliminatedPlayers: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterId: null, imposterCanStartFirst: false };
-    room.players.set(socket.id, { id: socket.id, name: playerName, connected: true });
+    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterId: null, imposterCanStartFirst: false };
+    room.players.set(socket.id, { id: socket.id, name: playerName, connected: true, eliminated: false });
     rooms.set(code, room);
     socket.join(code);
     done({ code, playerId: socket.id });
@@ -89,7 +96,7 @@ io.on('connection', (socket) => {
     if (room.phase !== 'lobby') return done({ error: 'This game has already started.' });
     if (players(room).length >= 16) return done({ error: 'This room is full (16 players max).' });
     if (players(room).some((p) => p.name.toLowerCase() === playerName.toLowerCase())) return done({ error: 'That name is already taken in this room.' });
-    room.players.set(socket.id, { id: socket.id, name: playerName, connected: true });
+    room.players.set(socket.id, { id: socket.id, name: playerName, connected: true, eliminated: false });
     socket.join(room.code);
     done({ code: room.code, playerId: socket.id });
     sendRoom(room);
@@ -106,7 +113,7 @@ io.on('connection', (socket) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
     if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
     if (players(room).length < 3) return socket.emit('game:error', 'You need at least 3 players to start.');
-    startRound(room);
+    startRound(room, { newGame: true });
     sendRoom(room);
   });
 
@@ -121,7 +128,7 @@ io.on('connection', (socket) => {
 
   socket.on('game:vote', ({ targetId } = {}) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
-    if (!room || room.phase !== 'voting' || targetId === socket.id || !room.players.has(targetId) || room.votes.has(socket.id)) return;
+    if (!room || room.phase !== 'voting' || room.players.get(socket.id)?.eliminated || targetId === socket.id || room.players.get(targetId)?.eliminated || !room.players.has(targetId) || room.votes.has(socket.id)) return;
     room.votes.set(socket.id, targetId);
     io.to(socket.id).emit('vote:confirmed');
     if (room.votes.size === players(room).length) {
@@ -135,13 +142,10 @@ io.on('connection', (socket) => {
       let eliminated = null;
       if (votedPlayer && !caught) {
         eliminated = votedPlayer.name;
+        votedPlayer.eliminated = true;
         io.to(votedPlayer.id).emit('game:eliminated', { name: votedPlayer.name });
-        room.eliminatedPlayers.set(votedPlayer.id, votedPlayer);
-        io.sockets.sockets.get(votedPlayer.id)?.leave(room.code);
-        room.players.delete(votedPlayer.id);
-        if (room.hostId === votedPlayer.id) room.hostId = players(room)[0]?.id;
       }
-      const gameOver = caught || (!tie && room.players.size === 2);
+      const gameOver = caught || (!tie && players(room).length === 2);
       room.result = {
         caught,
         tie,
@@ -151,7 +155,7 @@ io.on('connection', (socket) => {
         votedOut: votedPlayer?.name || null,
         imposter: gameOver ? players(room).find((player) => player.id === room.imposterId)?.name : null,
         footballer: room.footballer,
-        remainingPlayers: room.players.size,
+        remainingPlayers: players(room).length,
       };
       room.phase = 'result';
     }
@@ -162,7 +166,7 @@ io.on('connection', (socket) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
     if (!room || room.hostId !== socket.id) return;
     if (phase === 'voting' && room.phase === 'hints' && room.speakerIndex === room.speakingOrder.length - 1) { room.phase = 'voting'; room.votes.clear(); sendRoom(room); }
-    if (phase === 'hints' && room.phase === 'result' && !room.result?.gameOver && room.players.size > 2) {
+    if (phase === 'hints' && room.phase === 'result' && !room.result?.gameOver && players(room).length > 2) {
       startRound(room);
       sendRoom(room);
     }
@@ -171,16 +175,9 @@ io.on('connection', (socket) => {
   socket.on('game:new', () => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
     if (!room || room.hostId !== socket.id || room.phase !== 'result' || !room.result?.gameOver) return;
-    for (const [playerId, player] of room.eliminatedPlayers) {
-      const eliminatedSocket = io.sockets.sockets.get(playerId);
-      if (!eliminatedSocket) continue;
-      room.players.set(playerId, { ...player, role: undefined, connected: true });
-      eliminatedSocket.join(room.code);
-    }
-    room.eliminatedPlayers.clear();
+    for (const player of allPlayers(room)) player.eliminated = !player.connected;
     if (players(room).length < 3) return socket.emit('game:error', 'At least 3 players need to be connected to start a new game.');
-    room.imposterId = null;
-    startRound(room);
+    startRound(room, { newGame: true });
     sendRoom(room);
   });
 
