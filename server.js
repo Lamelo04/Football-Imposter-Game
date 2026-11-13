@@ -18,6 +18,8 @@ const publicRoom = (room) => ({
   phase: room.phase,
   players: players(room).map(({ id, name, connected }) => ({ id, name, connected })),
   hostId: room.hostId,
+  speakingOrder: room.speakingOrder || [],
+  speakerIndex: room.speakerIndex ?? 0,
   votes: room.votes.size,
   voteCount: room.phase === 'voting' ? players(room).length : undefined,
   result: room.phase === 'result' ? room.result : undefined,
@@ -35,13 +37,33 @@ const makeCode = () => {
   return code;
 };
 const cleanName = (name) => String(name || '').trim().replace(/[<>]/g, '').slice(0, 18);
+const shuffled = (items) => {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+};
+const startRound = (room) => {
+  room.phase = 'hints';
+  room.votes.clear();
+  room.result = null;
+  room.speakingOrder = shuffled(players(room).map((player) => player.id));
+  room.speakerIndex = 0;
+  const impostorIndex = randomInt(players(room).length);
+  players(room).forEach((player, index) => {
+    player.role = index === impostorIndex ? 'imposter' : 'player';
+    io.to(player.id).emit('game:role', { role: player.role, footballer: player.role === 'player' ? room.footballer : null });
+  });
+};
 
 io.on('connection', (socket) => {
   socket.on('room:create', ({ name } = {}, done = () => {}) => {
     const playerName = cleanName(name);
     if (!playerName) return done({ error: 'Enter your name first.' });
     const code = makeCode();
-    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null };
+    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0 };
     room.players.set(socket.id, { id: socket.id, name: playerName, connected: true });
     rooms.set(code, room);
     socket.join(code);
@@ -70,15 +92,17 @@ io.on('connection', (socket) => {
     if (players(room).length < 3) return socket.emit('game:error', 'You need at least 3 players to start.');
     const names = FOOTBALLERS;
     room.footballer = names[randomInt(names.length)];
-    room.votes.clear();
-    room.result = null;
-    const impostorIndex = randomInt(players(room).length);
-    players(room).forEach((player, index) => {
-      player.role = index === impostorIndex ? 'imposter' : 'player';
-      io.to(player.id).emit('game:role', { role: player.role, footballer: player.role === 'player' ? room.footballer : null });
-    });
-    room.phase = 'hints';
+    startRound(room);
     sendRoom(room);
+  });
+
+  socket.on('game:next-speaker', () => {
+    const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
+    if (!room || room.hostId !== socket.id || room.phase !== 'hints') return;
+    if (room.speakerIndex < room.speakingOrder.length - 1) {
+      room.speakerIndex += 1;
+      sendRoom(room);
+    }
   });
 
   socket.on('game:vote', ({ targetId } = {}) => {
@@ -107,14 +131,9 @@ io.on('connection', (socket) => {
   socket.on('game:phase', ({ phase } = {}) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
     if (!room || room.hostId !== socket.id) return;
-    if (phase === 'voting' && room.phase === 'hints') { room.phase = 'voting'; room.votes.clear(); sendRoom(room); }
+    if (phase === 'voting' && room.phase === 'hints' && room.speakerIndex === room.speakingOrder.length - 1) { room.phase = 'voting'; room.votes.clear(); sendRoom(room); }
     if (phase === 'hints' && room.phase === 'result') {
-      room.phase = 'hints'; room.votes.clear(); room.result = null;
-      const impostorIndex = randomInt(players(room).length);
-      players(room).forEach((player, index) => {
-        player.role = index === impostorIndex ? 'imposter' : 'player';
-        io.to(player.id).emit('game:role', { role: player.role, footballer: player.role === 'player' ? room.footballer : null });
-      });
+      startRound(room);
       sendRoom(room);
     }
   });
