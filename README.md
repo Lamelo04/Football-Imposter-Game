@@ -23,8 +23,8 @@ Rooms live in server memory and are cleared when the server restarts. Keep one s
 
 1. Host creates a room and shares the code.
 2. Players join from their phones; the host starts with at least three players.
-3. The host can allow the imposter to speak first. Otherwise, the imposter is never first in the randomized speaking order.
-4. Each player sees their role privately. Everyone but the imposter sees that round's footballer.
+3. The host chooses the number of imposters and can allow an imposter to speak first. Otherwise, the randomized first speaker is always on the footballer team.
+4. Each player sees their role privately. Footballers stay hidden from imposters on all shared result screens until the game ends.
 5. Take turns giving one verbal clue, then vote privately.
-6. If the imposter is voted out, they get one private guess at the footballer. A correct guess wins them the game; otherwise, the group wins. If an innocent player is voted out, they are removed from play and the game continues with the same footballer and imposter. The imposter also wins when only two active players remain.
+6. If an imposter is voted out, they get one private guess at the footballer. A correct guess wins for the imposter team; a wrong guess removes that imposter and play continues. If a footballer is voted out, they are removed from play and the game continues with the same footballer and remaining imposters. The imposter team wins when imposters equal or outnumber the remaining footballers.
 7. The room owner keeps control even if voted out. After a game ends, they can start a new game with a different footballer and freshly assigned roles; eliminated players who are still connected return.

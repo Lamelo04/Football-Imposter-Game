@@ -20,12 +20,13 @@ const publicRoom = (room) => ({
   players: players(room).map(({ id, name, connected }) => ({ id, name, connected })),
   hostId: room.hostId,
   imposterCanStartFirst: room.imposterCanStartFirst,
+  imposterCount: room.imposterCount,
   speakingOrder: room.speakingOrder || [],
   speakerIndex: room.speakerIndex ?? 0,
   votes: room.votes.size,
   voteCount: room.phase === 'voting' ? players(room).length : undefined,
   result: room.phase === 'result' || room.phase === 'guess'
-    ? { ...room.result, footballer: room.phase === 'guess' ? null : room.result?.footballer }
+    ? { ...room.result, footballer: room.result?.gameOver ? room.result.footballer : null }
     : undefined,
 });
 const sendRoom = (room) => io.to(room.code).emit('room:update', publicRoom(room));
@@ -59,19 +60,22 @@ const startRound = (room, { newGame = false } = {}) => {
   }
   if (newGame) {
     for (const player of allPlayers(room)) player.eliminated = !player.connected;
-    room.imposterId = null;
+    const activePlayers = players(room);
+    const maxImposters = Math.max(1, Math.min(4, Math.floor(activePlayers.length / 2)));
+    const count = Math.max(1, Math.min(room.imposterCount, maxImposters));
+    room.imposterCount = count;
+    room.imposterIds = shuffled(activePlayers.map((player) => player.id)).slice(0, count);
+    room.imposterRoster = [...room.imposterIds];
   }
-  if (!room.imposterId || !room.players.has(room.imposterId) || room.players.get(room.imposterId).eliminated) {
-    room.imposterId = players(room)[randomInt(players(room).length)].id;
-  }
+  room.imposterIds = (room.imposterIds || []).filter((id) => room.players.has(id) && !room.players.get(id).eliminated);
   room.speakingOrder = shuffled(players(room).map((player) => player.id));
-  if (!room.imposterCanStartFirst && room.speakingOrder[0] === room.imposterId) {
-    const replacement = randomInt(1, room.speakingOrder.length);
-    [room.speakingOrder[0], room.speakingOrder[replacement]] = [room.speakingOrder[replacement], room.speakingOrder[0]];
+  if (!room.imposterCanStartFirst && room.imposterIds.includes(room.speakingOrder[0])) {
+    const replacement = room.speakingOrder.findIndex((id, index) => index > 0 && !room.imposterIds.includes(id));
+    if (replacement > 0) [room.speakingOrder[0], room.speakingOrder[replacement]] = [room.speakingOrder[replacement], room.speakingOrder[0]];
   }
   room.speakerIndex = 0;
   players(room).forEach((player) => {
-    player.role = player.id === room.imposterId ? 'imposter' : 'player';
+    player.role = room.imposterIds.includes(player.id) ? 'imposter' : 'player';
     io.to(player.id).emit('game:role', { role: player.role, footballer: player.role === 'player' ? room.footballer : null });
   });
 };
@@ -81,7 +85,7 @@ io.on('connection', (socket) => {
     const playerName = cleanName(name);
     if (!playerName) return done({ error: 'Enter your name first.' });
     const code = makeCode();
-    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterId: null, imposterCanStartFirst: false };
+    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterIds: [], imposterRoster: [], imposterCount: 1, imposterCanStartFirst: false };
     room.players.set(socket.id, { id: socket.id, name: playerName, connected: true, eliminated: false });
     rooms.set(code, room);
     socket.join(code);
@@ -104,10 +108,14 @@ io.on('connection', (socket) => {
     sendRoom(room);
   });
 
-  socket.on('game:settings', ({ imposterCanStartFirst } = {}) => {
+  socket.on('game:settings', ({ imposterCanStartFirst, imposterCount } = {}) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
     if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
-    room.imposterCanStartFirst = Boolean(imposterCanStartFirst);
+    if (imposterCanStartFirst !== undefined) room.imposterCanStartFirst = Boolean(imposterCanStartFirst);
+    if (imposterCount !== undefined) {
+      const maxImposters = Math.max(1, Math.min(4, Math.floor(players(room).length / 2)));
+      room.imposterCount = Math.max(1, Math.min(maxImposters, Math.floor(Number(imposterCount) || 1)));
+    }
     sendRoom(room);
   });
 
@@ -140,7 +148,7 @@ io.on('connection', (socket) => {
       const top = [...counts].filter(([, count]) => count === max).map(([id]) => id);
       const tie = top.length > 1;
       const votedPlayer = top.length === 1 ? room.players.get(top[0]) : null;
-      const caught = votedPlayer?.id === room.imposterId;
+      const caught = Boolean(votedPlayer && room.imposterIds.includes(votedPlayer.id));
       let eliminated = null;
       if (votedPlayer && !caught) {
         eliminated = votedPlayer.name;
@@ -148,6 +156,7 @@ io.on('connection', (socket) => {
         io.to(votedPlayer.id).emit('game:eliminated', { name: votedPlayer.name });
       }
       if (caught) {
+        room.caughtImposterId = votedPlayer.id;
         room.result = {
           caught: true,
           tie: false,
@@ -158,17 +167,21 @@ io.on('connection', (socket) => {
           remainingPlayers: players(room).length,
         };
         room.phase = 'guess';
+        io.to(room.caughtImposterId).emit('game:guess:ready');
       } else {
-        const gameOver = !tie && players(room).length === 2;
+        const remainingImposters = room.imposterIds.length;
+        const remainingCrew = players(room).filter((player) => !room.imposterIds.includes(player.id)).length;
+        const gameOver = remainingImposters === 0 || (!tie && remainingCrew <= remainingImposters);
+        const imposterWon = remainingImposters > 0 && remainingCrew <= remainingImposters;
         room.result = {
-          caught: false,
+          caught: gameOver && !imposterWon,
           tie,
           gameOver,
-          imposterWon: gameOver,
+          imposterWon,
           eliminated,
           votedOut: votedPlayer?.name || null,
-          imposter: gameOver ? players(room).find((player) => player.id === room.imposterId)?.name : null,
-          footballer: room.footballer,
+          imposter: gameOver ? allPlayers(room).filter((player) => room.imposterRoster.includes(player.id)).map((player) => player.name) : null,
+          footballer: gameOver ? room.footballer : null,
           remainingPlayers: players(room).length,
         };
         room.phase = 'result';
@@ -189,17 +202,29 @@ io.on('connection', (socket) => {
 
   socket.on('game:guess', ({ footballer } = {}) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
-    if (!room || room.phase !== 'guess' || socket.id !== room.imposterId) return;
+    if (!room || room.phase !== 'guess' || socket.id !== room.caughtImposterId) return;
     const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const correct = normalize(footballer) === normalize(room.footballer);
+    const caughtPlayer = room.players.get(room.caughtImposterId);
+    if (!correct && caughtPlayer) {
+      caughtPlayer.eliminated = true;
+      room.imposterIds = room.imposterIds.filter((id) => id !== room.caughtImposterId);
+      io.to(caughtPlayer.id).emit('game:eliminated', { name: caughtPlayer.name });
+    }
+    const remainingImposters = room.imposterIds.length;
+    const remainingCrew = players(room).filter((player) => !room.imposterIds.includes(player.id)).length;
+    const gameOver = correct || remainingImposters === 0 || remainingCrew <= remainingImposters;
+    const imposterWon = correct || (remainingImposters > 0 && remainingCrew <= remainingImposters);
     room.result = {
-      caught: !correct,
+      caught: gameOver && !imposterWon,
       guessCorrect: correct,
-      gameOver: true,
-      imposterWon: correct,
+      wrongGuess: !correct,
+      gameOver,
+      imposterWon,
       tie: false,
-      imposter: room.players.get(room.imposterId)?.name,
-      footballer: room.footballer,
+      eliminated: !correct ? caughtPlayer?.name : null,
+      imposter: gameOver ? allPlayers(room).filter((player) => room.imposterRoster.includes(player.id)).map((player) => player.name) : null,
+      footballer: gameOver ? room.footballer : null,
       remainingPlayers: players(room).length,
     };
     room.phase = 'result';
