@@ -12,6 +12,7 @@ let guessSubmitted = false;
 let canGuess = false;
 let guessCountdownTimer = null;
 let speakerCountdownTimer = null;
+let currentVoteRound = null;
 let toastTimer;
 
 function notify(message) {
@@ -56,6 +57,9 @@ function showRoom(code) {
   renderRoom();
 }
 function escapeHtml(str) { return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function kickButton(playerId, host) {
+  return host && playerId !== me ? '<button class="kick-button" type="button" data-kick="' + escapeHtml(playerId) + '">Disconnect</button>' : '';
+}
 function renderRoom() {
   if (guessCountdownTimer) clearInterval(guessCountdownTimer);
   if (speakerCountdownTimer) clearInterval(speakerCountdownTimer);
@@ -72,7 +76,13 @@ function renderRoom() {
     const revealText = roleInfo ? (roleInfo.role === 'imposter' ? 'YOU’RE THE IMPOSTER' : 'YOUR FOOTBALLER') : 'YOUR ROLE IS LOADING';
     main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>ROUND IN PROGRESS</span><span class="badge">HINTS</span></div><div class="role-card ' + (roleInfo?.role === 'imposter' ? 'imposter' : '') + '"><div class="role-label">' + revealText + '</div><div class="role-word ' + (roleInfo ? '' : 'role-blur') + '">' + (roleInfo?.role === 'imposter' ? 'Imposter' : roleInfo?.footballer ? escapeHtml(roleInfo.footballer) : 'Footballer') + '</div><div class="role-hint">' + (roleInfo?.role === 'imposter' ? 'Blend in. Listen to the clues and don’t get caught.' : 'Give one short clue on your turn. Keep it subtle enough to avoid helping the imposter.') + '</div></div><div class="player-list">' + roomState.players.map((p) => '<div class="player-row"><span class="player-avatar">' + escapeHtml(p.name.slice(0, 1).toUpperCase()) + '</span>' + escapeHtml(p.name) + (p.id === me ? '<span class="you">YOU</span>' : '') + '</div>').join('') + '</div>' + (host ? '<button class="button button-primary" id="open-vote">Done with clues — vote <span>→</span></button>' : '<div class="wait-note">Take turns saying one clue out loud. The host will open voting when you’re done.</div>') + '</div><aside class="side-panel"><div class="panel-top"><span>THE RULES</span><span>02 / 03</span></div><h3 class="phase-title">One clue each.</h3><p class="side-copy">Say it out loud in a circle. No names, initials, or phone peeking. The imposter’s goal is to sound like they know the player.</p><div class="step"><b>1</b> GET YOUR SECRET PLAYER</div><div class="step active"><b>2</b> GIVE A CLUE, TAKE TURNS</div><div class="step"><b>3</b> VOTE OUT THE IMPOSTER</div></aside></div>';
   } else if (roomState.phase === 'voting') {
-    main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>WHO’S THE IMPOSTER?</span><span class="badge">' + roomState.votes + ' / ' + roomState.voteCount + ' VOTES</span></div><h3 class="phase-title">Lock in your vote.</h3><p class="side-copy">Pick the player whose clues felt a little too suspicious.</p><div class="voter-list">' + roomState.players.map((p) => '<button class="vote-button ' + (selectedVote === p.id ? 'selected' : '') + '" data-vote="' + escapeHtml(p.id) + '" ' + (p.id === me || voteConfirmed ? 'disabled' : '') + '><span class="player-avatar">' + escapeHtml(p.name.slice(0, 1).toUpperCase()) + '</span>' + escapeHtml(p.name) + (selectedVote === p.id ? '<span class="arrow">✓</span>' : '') + '</button>').join('') + '</div>' + (voteConfirmed ? '<div class="wait-note">Vote locked. Waiting for the rest of the squad…</div>' : selectedVote ? '<button class="button button-primary" id="confirm-vote">Lock my vote <span>↗</span></button>' : '') + '</div><aside class="side-panel"><div class="panel-top"><span>LAST CALL</span><span>03 / 03</span></div><h3 class="phase-title">Trust your gut.</h3><p class="side-copy">The vote is private. Once everybody has picked, the imposter is revealed.</p></aside></div>';
+    const kickManager = host ? '<div class="kick-manager"><span>HOST: DISCONNECT A PLAYER</span>' + roomState.players.filter((p) => p.id !== me).map((p) => '<div class="kick-roster-entry"><span>' + escapeHtml(p.name) + '</span>' + kickButton(p.id, host) + '</div>').join('') + '</div>' : '';
+    main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>WHO’S THE IMPOSTER?</span><span class="badge">' + roomState.votes + ' / ' + roomState.voteCount + ' VOTES</span></div><h3 class="phase-title">Lock in your vote.</h3><p class="side-copy">Pick the player whose clues felt a little too suspicious.</p><div class="voter-list">' + roomState.players.map((p) => '<button class="vote-button ' + (selectedVote === p.id ? 'selected' : '') + '" data-vote="' + escapeHtml(p.id) + '" ' + (p.id === me || voteConfirmed ? 'disabled' : '') + '><span class="player-avatar">' + escapeHtml(p.name.slice(0, 1).toUpperCase()) + '</span>' + escapeHtml(p.name) + (selectedVote === p.id ? '<span class="arrow">✓</span>' : '') + '</button>').join('') + '</div>' + (voteConfirmed ? '<div class="wait-note">Vote locked. Waiting for the rest of the squad…</div>' : selectedVote ? '<button class="button button-primary" id="confirm-vote">Lock my vote <span>↗</span></button>' : '') + kickManager + '</div><aside class="side-panel"><div class="panel-top"><span>LAST CALL</span><span>03 / 03</span></div><h3 class="phase-title">Trust your gut.</h3><p class="side-copy">The vote is private. Once everybody has picked, the imposter is revealed.</p></aside></div>';
+  } else if (roomState.phase === 'revote') {
+    const tiedBallots = (roomState.tieVotes || []).map((entry) => '<div class="tie-entry"><strong>' + escapeHtml(entry.name) + '</strong><span>Previous votes: ' + (entry.voters.length ? entry.voters.map(escapeHtml).join(', ') : 'No one') + '</span></div>').join('');
+    const tiedCandidates = (roomState.voteCandidates || []).map((id) => roomState.players.find((player) => player.id === id)).filter(Boolean);
+    const kickManager = host ? '<div class="kick-manager"><span>HOST: DISCONNECT A PLAYER</span>' + roomState.players.filter((p) => p.id !== me).map((p) => '<div class="kick-roster-entry"><span>' + escapeHtml(p.name) + '</span>' + kickButton(p.id, host) + '</div>').join('') + '</div>' : '';
+    main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>TIE-BREAK VOTE</span><span class="badge">' + roomState.votes + ' / ' + roomState.voteCount + ' VOTES</span></div><h3 class="phase-title">Vote among the tied players.</h3><p class="side-copy">Only players tied in the previous vote can be selected. If this vote ties again, the leaders go to another runoff.</p><div class="tie-breakdown"><div class="role-label">PREVIOUS TIED VOTES</div>' + tiedBallots + '</div><div class="voter-list">' + tiedCandidates.map((p) => '<button class="vote-button ' + (selectedVote === p.id ? 'selected' : '') + '" data-vote="' + escapeHtml(p.id) + '" ' + (p.id === me || voteConfirmed ? 'disabled' : '') + '><span class="player-avatar">' + escapeHtml(p.name.slice(0, 1).toUpperCase()) + '</span>' + escapeHtml(p.name) + (selectedVote === p.id ? '<span class="arrow">✓</span>' : '') + '</button>').join('') + '</div>' + (voteConfirmed ? '<div class="wait-note">Runoff vote locked. Waiting for everyone…</div>' : selectedVote ? '<button class="button button-primary" id="confirm-vote">Lock my runoff vote <span>↗</span></button>' : '') + kickManager + '</div><aside class="side-panel"><div class="panel-top"><span>RUNOFF</span><span>ONLY TIED PLAYERS</span></div><h3 class="phase-title">Break the tie.</h3><p class="side-copy">Every active player votes again. The footballer stays hidden until the game ends.</p></aside></div>';
   } else {
     const result = roomState.result || {};
     const headline = result.caught ? 'Caught offside.' : 'They got away.';
@@ -88,7 +98,7 @@ function renderRoom() {
       const player = roomState.players.find((p) => p.id === id);
       if (!player) return '';
       const status = index < roomState.speakerIndex ? 'DONE' : index === roomState.speakerIndex ? 'SPEAKING' : 'UP NEXT';
-      return '<div class="player-row speaking-row ' + (index === roomState.speakerIndex ? 'speaking-now' : index < roomState.speakerIndex ? 'speaker-done' : '') + '"><span class="speaker-number">' + (index + 1) + '</span><span class="player-avatar">' + escapeHtml(player.name.slice(0, 1).toUpperCase()) + '</span>' + escapeHtml(player.name) + (player.id === me ? '<span class="you">YOU</span>' : '') + '<span class="speaker-status">' + status + '</span></div>';
+      return '<div class="player-row speaking-row ' + (index === roomState.speakerIndex ? 'speaking-now' : index < roomState.speakerIndex ? 'speaker-done' : '') + '"><span class="speaker-number">' + (index + 1) + '</span><span class="player-avatar">' + escapeHtml(player.name.slice(0, 1).toUpperCase()) + '</span>' + escapeHtml(player.name) + (player.id === me ? '<span class="you">YOU</span>' : '') + '<span class="speaker-status">' + status + '</span>' + kickButton(player.id, host) + '</div>';
     }).join('');
     const turnMessage = isMyTurn ? 'You’re up! Give your clue out loud.' : (activePlayer ? escapeHtml(activePlayer.name) + ' is giving a clue.' : 'Getting the speaking order ready…');
     const hostAction = host ? (isLastSpeaker ? '<div class="wait-note">Final clue: voting opens when this 15-second turn ends.</div>' : '<button class="button button-primary" id="next-speaker">Clue given — next speaker <span>→</span></button>') : '<div class="wait-note">' + (isMyTurn ? 'Give your clue within 15 seconds. The next turn starts automatically.' : 'Listen to the clue. Turns advance automatically after 15 seconds.') + '</div>';
@@ -99,6 +109,10 @@ function renderRoom() {
     const imposterOptions = Array.from({ length: maxImposters }, (_, index) => '<option value="' + (index + 1) + '" ' + (roomState.imposterCount === index + 1 ? 'selected' : '') + '>' + (index + 1) + '</option>').join('');
     const setting = host ? '<label class="imposter-setting"><input type="checkbox" id="imposter-first" ' + (roomState.imposterCanStartFirst ? 'checked' : '') + '><span><strong>Imposter can speak first</strong><small>When off, an imposter will never be first in the clue order.</small></span></label><label class="guess-label" for="imposter-count">NUMBER OF IMPOSTERS</label><select class="imposter-count-select" id="imposter-count">' + imposterOptions + '</select>' : '';
     main = '<div class="game-grid"><div class="game-panel"><div class="panel-top"><span>PLAYERS IN THE HUDDLE</span><span class="badge">' + roomState.players.length + ' / 16</span></div><div class="player-list">' + roomState.players.map((p) => '<div class="player-row"><span class="player-avatar">' + escapeHtml(p.name.slice(0, 1).toUpperCase()) + '</span>' + escapeHtml(p.name) + (p.id === me ? '<span class="you">YOU</span>' : '') + (p.id === roomState.hostId ? '<span class="host-tag">HOST</span>' : '') + '</div>').join('') + '</div><div class="wait-note">' + (host ? 'Everyone here? Choose the speaking rule and imposter count, then start.' : 'You’re in. Keep this page open while the host gets everyone ready.') + '</div>' + setting + (host ? '<button class="button button-primary" id="start-game">Start the game <span>↗</span></button>' : '') + '</div><aside class="side-panel"><div class="panel-top"><span>HOW TO PLAY</span><span>01 / 03</span></div><h3 class="phase-title">Keep your clues close.</h3><p class="side-copy">Everyone gets a footballer except the imposters. Give clues in order, then vote. The imposter team wins when it catches up with the remaining footballers.</p></aside></div>';
+    if (host) {
+      const kickManager = '<div class="kick-manager"><span>HOST: DISCONNECT A PLAYER</span>' + roomState.players.filter((p) => p.id !== me).map((p) => '<div class="kick-roster-entry"><span>' + escapeHtml(p.name) + '</span>' + kickButton(p.id, host) + '</div>').join('') + '</div>';
+      main = main.replace('<div class="wait-note">', kickManager + '<div class="wait-note">');
+    }
   }
   if (roomState.phase === 'result') {
     const result = roomState.result || {};
@@ -139,6 +153,10 @@ function renderRoom() {
   document.querySelector('#start-game')?.addEventListener('click', () => socket.emit('game:start'));
   document.querySelector('#imposter-first')?.addEventListener('change', (event) => socket.emit('game:settings', { imposterCanStartFirst: event.target.checked }));
   document.querySelector('#imposter-count')?.addEventListener('change', (event) => socket.emit('game:settings', { imposterCount: Number(event.target.value) }));
+  document.querySelectorAll('[data-kick]').forEach((button) => button.addEventListener('click', () => {
+    const targetId = button.dataset.kick;
+    if (window.confirm('Disconnect this player from the room?')) socket.emit('game:kick', { targetId });
+  }));
   document.querySelector('#open-vote')?.addEventListener('click', () => socket.emit('game:phase', { phase: 'voting' }));
   document.querySelector('#next-speaker')?.addEventListener('click', () => socket.emit('game:next-speaker'));
   document.querySelectorAll('[data-vote]').forEach((button) => button.addEventListener('click', () => { selectedVote = button.dataset.vote; renderRoom(); }));
@@ -200,6 +218,11 @@ document.querySelector('#host-name').addEventListener('keydown', (event) => { if
 document.querySelector('#join-name').addEventListener('keydown', (event) => { if (event.key === 'Enter') joinRoom(); });
 document.querySelector('#room-code').addEventListener('keydown', (event) => { if (event.key === 'Enter') joinRoom(); });
 socket.on('room:update', (state) => {
+  if (state.voteRound !== currentVoteRound) {
+    currentVoteRound = state.voteRound;
+    voteConfirmed = false;
+    selectedVote = null;
+  }
   roomState = state;
   if (state.phase === 'lobby') {
     wasEliminated = false;
@@ -228,4 +251,12 @@ socket.on('game:error', notify);
 socket.on('game:eliminated', ({ name } = {}) => {
   wasEliminated = true;
   notify((name || 'You') + ' were voted out of the active game. The room owner can still manage the room.');
+});
+socket.on('game:kicked', () => {
+  sessionStorage.removeItem('offside-room');
+  sessionStorage.removeItem('offside-name');
+  me = null;
+  roomView.classList.add('hidden');
+  welcome.classList.remove('hidden');
+  notify('The host disconnected you from the room.');
 });

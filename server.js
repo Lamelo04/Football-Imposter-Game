@@ -24,7 +24,10 @@ const publicRoom = (room) => ({
   speakingOrder: room.speakingOrder || [],
   speakerIndex: room.speakerIndex ?? 0,
   votes: room.votes.size,
-  voteCount: room.phase === 'voting' ? players(room).length : undefined,
+  voteRound: room.voteRound || 0,
+  voteCount: room.phase === 'voting' || room.phase === 'revote' ? players(room).length : undefined,
+  voteCandidates: room.phase === 'revote' ? room.voteCandidates : undefined,
+  tieVotes: room.phase === 'revote' ? room.tieVotes : undefined,
   speakerDeadline: room.phase === 'hints' ? room.speakerDeadline : undefined,
   result: room.phase === 'result' || room.phase === 'guess'
     ? { ...room.result, footballer: room.result?.gameOver ? room.result.footballer : null }
@@ -97,8 +100,82 @@ const advanceSpeaker = (room) => {
   } else {
     room.phase = 'voting';
     room.votes.clear();
+    room.voteRound = (room.voteRound || 0) + 1;
   }
   sendRoom(room);
+};
+const finishAfterPlayerDrop = (room) => {
+  const remainingImposters = room.imposterIds.length;
+  const remainingCrew = players(room).filter((player) => !room.imposterIds.includes(player.id)).length;
+  if (remainingImposters > 0 && remainingCrew > remainingImposters) return false;
+  if (room.guessTimer) clearTimeout(room.guessTimer);
+  if (room.speakerTimer) clearTimeout(room.speakerTimer);
+  room.guessTimer = null;
+  room.guessDeadline = null;
+  room.speakerTimer = null;
+  room.speakerDeadline = null;
+  room.phase = 'result';
+  room.result = {
+    caught: remainingImposters === 0,
+    tie: false,
+    gameOver: true,
+    imposterWon: remainingImposters > 0,
+    imposter: allPlayers(room).filter((player) => room.imposterRoster.includes(player.id)).map((player) => player.name),
+    footballer: room.footballer,
+    remainingPlayers: players(room).length,
+  };
+  sendRoom(room);
+  return true;
+};
+const removePlayerFromRoom = (room, playerId) => {
+  const player = room.players.get(playerId);
+  if (!player || !player.connected) return false;
+  player.connected = false;
+  if (room.phase === 'lobby') {
+    room.players.delete(playerId);
+    if (room.hostId === playerId) room.hostId = players(room).find((candidate) => candidate.connected)?.id;
+    sendRoom(room);
+    return true;
+  }
+
+  player.eliminated = true;
+  room.imposterIds = room.imposterIds.filter((id) => id !== playerId);
+  room.votes.delete(playerId);
+  for (const [voterId, targetId] of room.votes) if (targetId === playerId) room.votes.delete(voterId);
+  if (room.hostId === playerId) room.hostId = players(room).find((candidate) => candidate.connected)?.id;
+
+  if (room.phase === 'guess' && room.caughtImposterId === playerId) {
+    resolveImposterGuess(room, '', true);
+    return true;
+  }
+  if (room.phase === 'hints') {
+    const orderIndex = room.speakingOrder.indexOf(playerId);
+    if (orderIndex >= 0) {
+      room.speakingOrder.splice(orderIndex, 1);
+      if (orderIndex < room.speakerIndex) room.speakerIndex -= 1;
+      else if (orderIndex === room.speakerIndex) {
+        if (room.speakerTimer) clearTimeout(room.speakerTimer);
+        if (room.speakerIndex >= room.speakingOrder.length) {
+          room.phase = 'voting';
+          room.speakerTimer = null;
+          room.speakerDeadline = null;
+          room.voteRound += 1;
+        } else {
+          room.speakerDeadline = Date.now() + 15_000;
+          room.speakerTimer = setTimeout(() => advanceSpeaker(room), 15_000);
+        }
+      }
+    }
+  } else if (room.phase === 'voting' || room.phase === 'revote') {
+    room.phase = 'voting';
+    room.voteCandidates = null;
+    room.tieVotes = null;
+    room.votes.clear();
+    room.voteRound += 1;
+  }
+  if (finishAfterPlayerDrop(room)) return true;
+  sendRoom(room);
+  return true;
 };
 const startRound = (room, { newGame = false } = {}) => {
   if (room.guessTimer) clearTimeout(room.guessTimer);
@@ -110,6 +187,9 @@ const startRound = (room, { newGame = false } = {}) => {
   room.phase = 'hints';
   room.votes.clear();
   room.result = null;
+  room.voteCandidates = null;
+  room.tieVotes = null;
+  room.voteRound = 0;
   if (newGame || !room.footballer) {
     const nextFootballers = FOOTBALLERS.filter((name) => name !== room.footballer);
     room.footballer = nextFootballers[randomInt(nextFootballers.length)];
@@ -143,7 +223,7 @@ io.on('connection', (socket) => {
     const playerName = cleanName(name);
     if (!playerName) return done({ error: 'Enter your name first.' });
     const code = makeCode();
-    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterIds: [], imposterRoster: [], imposterCount: 1, imposterCanStartFirst: false };
+    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterIds: [], imposterRoster: [], imposterCount: 1, imposterCanStartFirst: false, voteRound: 0 };
     room.players.set(socket.id, { id: socket.id, name: playerName, connected: true, eliminated: false });
     rooms.set(code, room);
     socket.join(code);
@@ -193,7 +273,8 @@ io.on('connection', (socket) => {
 
   socket.on('game:vote', ({ targetId } = {}) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
-    if (!room || room.phase !== 'voting' || room.players.get(socket.id)?.eliminated || targetId === socket.id || room.players.get(targetId)?.eliminated || !room.players.has(targetId) || room.votes.has(socket.id)) return;
+    if (!room || !['voting', 'revote'].includes(room.phase) || room.players.get(socket.id)?.eliminated || targetId === socket.id || room.players.get(targetId)?.eliminated || !room.players.has(targetId) || room.votes.has(socket.id)) return;
+    if (room.phase === 'revote' && !room.voteCandidates?.includes(targetId)) return;
     room.votes.set(socket.id, targetId);
     io.to(socket.id).emit('vote:confirmed');
     if (room.votes.size === players(room).length) {
@@ -201,14 +282,24 @@ io.on('connection', (socket) => {
       for (const id of room.votes.values()) counts.set(id, (counts.get(id) || 0) + 1);
       const max = Math.max(...counts.values());
       const top = [...counts].filter(([, count]) => count === max).map(([id]) => id);
-      const tie = top.length > 1;
-      const tieVotes = tie ? top.map((id) => ({
+      const tiedAgain = top.length > 1;
+      const tieVotes = tiedAgain ? top.map((id) => ({
         name: room.players.get(id)?.name || 'Unknown player',
         voters: [...room.votes.entries()]
           .filter(([, votedFor]) => votedFor === id)
           .map(([voterId]) => room.players.get(voterId)?.name || 'Unknown player'),
       })) : null;
-      const votedPlayer = top.length === 1 ? room.players.get(top[0]) : null;
+      if (tiedAgain) {
+        room.phase = 'revote';
+        room.voteCandidates = top;
+        room.tieVotes = tieVotes;
+        room.votes.clear();
+        room.voteRound += 1;
+        sendRoom(room);
+        return;
+      }
+      const votedPlayer = room.players.get(top[0]);
+      const tie = false;
       const caught = Boolean(votedPlayer && room.imposterIds.includes(votedPlayer.id));
       let eliminated = null;
       if (votedPlayer && !caught) {
@@ -239,7 +330,7 @@ io.on('connection', (socket) => {
         room.result = {
           caught: gameOver && !imposterWon,
           tie,
-          tieVotes,
+          tieVotes: null,
           gameOver,
           imposterWon,
           eliminated,
@@ -250,6 +341,8 @@ io.on('connection', (socket) => {
         };
         room.phase = 'result';
       }
+      room.voteCandidates = null;
+      room.tieVotes = null;
     }
     sendRoom(room);
   });
@@ -263,6 +356,7 @@ io.on('connection', (socket) => {
       room.speakerDeadline = null;
       room.phase = 'voting';
       room.votes.clear();
+      room.voteRound += 1;
       sendRoom(room);
     }
     if (phase === 'hints' && room.phase === 'result' && !room.result?.gameOver && players(room).length > 2) {
@@ -304,15 +398,28 @@ io.on('connection', (socket) => {
     done({ ok: true, phase: 'lobby' });
   });
 
+  socket.on('game:kick', ({ targetId } = {}) => {
+    const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
+    if (!room || room.hostId !== socket.id || targetId === socket.id) return;
+    if (!['lobby', 'hints', 'voting', 'revote', 'guess', 'result'].includes(room.phase)) return;
+    const target = room.players.get(targetId);
+    if (!target?.connected) return;
+    io.to(targetId).emit('game:kicked', { name: target.name });
+    const targetSocket = io.sockets.sockets.get(targetId);
+    removePlayerFromRoom(room, targetId);
+    targetSocket?.leave(room.code);
+    targetSocket?.disconnect(true);
+  });
+
   socket.on('disconnect', () => {
     for (const room of rooms.values()) {
-      const player = room.players.get(socket.id);
-      if (!player) continue;
-      player.connected = false;
-      if (room.phase === 'lobby') room.players.delete(socket.id);
-      if (room.hostId === socket.id && room.phase === 'lobby') room.hostId = players(room)[0]?.id;
-      sendRoom(room);
-      if (players(room).length === 0) rooms.delete(room.code);
+      if (!room.players.has(socket.id)) continue;
+      removePlayerFromRoom(room, socket.id);
+      if (allPlayers(room).every((player) => !player.connected)) {
+        if (room.guessTimer) clearTimeout(room.guessTimer);
+        if (room.speakerTimer) clearTimeout(room.speakerTimer);
+        rooms.delete(room.code);
+      }
       break;
     }
   });
@@ -327,6 +434,38 @@ const FOOTBALLERS = [
   'Francesco Totti', 'Gareth Bale', 'Luis Suárez', 'Harry Kane', 'Bukayo Saka',
   'Zlatan Ibrahimović', 'Kaká', 'George Best', 'Paolo Maldini', 'Iker Casillas',
   'Manuel Neuer', 'Virgil van Dijk', 'Rodri', 'Antoine Griezmann', 'Son Heung-min',
+  'Lamine Yamal', 'Pedri', 'Gavi', 'Phil Foden', 'Cole Palmer', 'Declan Rice',
+  'Martin Ødegaard', 'Florian Wirtz', 'Jamal Musiala', 'Lautaro Martínez', 'Julián Álvarez',
+  'Trent Alexander-Arnold', 'Alisson Becker', 'Thibaut Courtois', 'Federico Valverde',
+  'Nico Williams', 'Rúben Dias', 'João Neves', 'Vitinha', 'Ousmane Dembélé',
+  'Rafael Leão', 'Victor Osimhen', 'Khvicha Kvaratskhelia', 'Alexander Isak',
+  'Viktor Gyökeres', 'Dusan Vlahović', 'Darwin Núñez', 'Enzo Fernández',
+  'Alexis Mac Allister', 'Bruno Fernandes', 'Bernardo Silva', 'Julián Draxler',
+  'Franz Beckenbauer', 'Gerd Müller', 'Lothar Matthäus', 'Miroslav Klose',
+  'Thomas Müller', 'Bastian Schweinsteiger', 'Toni Kroos', 'Philipp Lahm', 'Oliver Kahn',
+  'Karl-Heinz Rummenigge', 'Michael Ballack', 'Jürgen Klinsmann', 'Andriy Shevchenko',
+  'Lev Yashin', 'Dino Zoff', 'Gianluigi Buffon', 'Gianluigi Donnarumma', 'Fabio Cannavaro',
+  'Alessandro Del Piero', 'Gianfranco Zola', 'Roberto Baggio', 'Gennaro Gattuso',
+  'Daniele De Rossi', 'Giorgio Chiellini', 'Leonardo Bonucci', 'Filippo Inzaghi',
+  'Johan Cruyff', 'Marco van Basten', 'Ruud Gullit', 'Dennis Bergkamp', 'Arjen Robben',
+  'Robin van Persie', 'Wesley Sneijder', 'Clarence Seedorf', 'Edgar Davids',
+  'Ruud van Nistelrooy', 'Patrick Kluivert', 'Frank Rijkaard', 'Rivaldo', 'Romário',
+  'Zico', 'Sócrates', 'Garrincha', 'Cafu', 'Roberto Carlos', 'Dani Alves', 'Adriano',
+  'Juninho Pernambucano', 'Jairzinho', 'Carlos Alberto Torres', 'Falcão', 'Rogério Ceni',
+  'Enzo Francescoli', 'Gabriel Batistuta', 'Juan Román Riquelme', 'Ángel Di María',
+  'Sergio Agüero', 'Carlos Tévez', 'Javier Mascherano', 'Hernán Crespo', 'Pablo Aimar',
+  'George Weah', 'Samuel Eto’o', 'Yaya Touré', 'Didier Zokora', 'Jay-Jay Okocha',
+  'Nwankwo Kanu', 'Abedi Pelé', 'Michael Essien', 'Roger Milla', 'Riyad Mahrez',
+  'Achraf Hakimi', 'Hakim Ziyech', 'Mohamed Aboutrika', 'Hossam Hassan',
+  'Park Ji-sung', 'Cha Bum-kun', 'Hidetoshi Nakata', 'Shinji Kagawa', 'Keisuke Honda',
+  'Ali Daei', 'Tim Cahill', 'Clint Dempsey', 'Landon Donovan', 'Gianluca Vialli',
+  'David Villa', 'Fernando Torres', 'Raúl González', 'Carles Puyol', 'Sergio Busquets',
+  'Gerard Piqué', 'Cesc Fàbregas', 'David Silva', 'Fernando Hierro', 'Emilio Butragueño',
+  'Xabi Alonso', 'Santi Cazorla', 'Luis Figo', 'Eusébio', 'Rui Costa', 'Deco',
+  'Christian Vieri', 'David Trezeguet', 'Eric Cantona', 'Patrick Vieira', 'Raymond Kopa',
+  'Ian Rush', 'Tony Adams', 'John Terry', 'Ashley Cole', 'Paul Gascoigne', 'Teddy Sheringham',
+  'Alan Shearer', 'Gary Lineker', 'Peter Schmeichel', 'Michael Owen', 'Sol Campbell',
+  'Jean-Pierre Papin', 'Enzo Scifo', 'Hristo Stoichkov', 'Davor Šuker'
 ];
 
 server.listen(PORT, '0.0.0.0', () => console.log(`Football Undercover running on ${PORT}`));
