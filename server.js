@@ -75,6 +75,7 @@ const resolveImposterGuess = (room, guess, timedOut = false) => {
   room.result = {
     caught: gameOver && !imposterWon,
     guessCorrect: correct,
+    imposterGuess: timedOut ? null : String(guess || '').trim(),
     wrongGuess: !correct,
     guessTimedOut: timedOut,
     gameOver,
