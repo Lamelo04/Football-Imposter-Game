@@ -25,7 +25,7 @@ Rooms live in server memory and are cleared when the server restarts. Keep one s
 2. Players join from their phones; the host starts with at least three players.
 3. The host chooses the number of imposters and can allow an imposter to speak first. Otherwise, the randomized first speaker is always on the footballer team.
 4. Each player sees their role privately. Footballers stay hidden from imposters on all shared result screens until the game ends.
-5. Each speaker gets 15 seconds; turns advance automatically. After the final clue, everyone enters voting together.
+5. Each speaker gets 20 seconds; turns advance automatically. After the final clue, everyone enters voting together.
 6. A tied vote immediately starts a runoff among only the tied players. If the runoff ties again, vote again among the new tied leaders.
 7. If an imposter is voted out, their name is shown and they have 30 seconds to privately guess the footballer. A correct guess wins for the imposter team; a wrong or late guess removes that imposter and play continues if teammates remain. If a footballer is voted out, they are removed from play and the game continues with the same footballer and remaining imposters. The imposter team wins when imposters equal or outnumber the remaining footballers.
 8. If someone disconnects or refreshes during a game, they are removed from the active round so votes and turns can continue. The host can also disconnect players from the lobby, speaking order, or voting screen.
