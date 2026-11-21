@@ -102,17 +102,17 @@ const beginVoting = (room, phase = 'voting', candidates = null, tieVotes = null)
   room.votes.clear();
   room.voteRound = (room.voteRound || 0) + 1;
   room.voteDeadline = Date.now() + 30_000;
-  room.voteTimer = setTimeout(() => resolveVote(room), 30_000);
+  room.voteTimer = setTimeout(() => resolveVote(room, true), 30_000);
 };
-const resolveVote = (room) => {
+const resolveVote = (room, timedOut = false) => {
   if (!['voting', 'revote'].includes(room.phase)) return;
   if (room.voteTimer) clearTimeout(room.voteTimer);
   room.voteTimer = null;
   room.voteDeadline = null;
   const counts = new Map();
-  for (const id of room.votes.values()) counts.set(id, (counts.get(id) || 0) + 1);
+  for (const id of room.votes.values()) if (id) counts.set(id, (counts.get(id) || 0) + 1);
   if (!counts.size) {
-    room.result = { noVotes: true, tie: false, gameOver: false, footballer: null, remainingPlayers: players(room).length };
+    room.result = { noVotes: true, voteTimedOut: timedOut, tie: false, gameOver: false, footballer: null, remainingPlayers: players(room).length };
     room.phase = 'result';
     room.voteCandidates = null;
     room.tieVotes = null;
@@ -257,8 +257,14 @@ const startRound = (room, { newGame = false } = {}) => {
   room.tieVotes = null;
   room.voteRound = 0;
   if (newGame || !room.footballer) {
-    const nextFootballers = FOOTBALLERS.filter((name) => name !== room.footballer);
+    room.usedFootballers ||= [];
+    let nextFootballers = FOOTBALLERS.filter((name) => !room.usedFootballers.includes(name));
+    if (!nextFootballers.length) {
+      room.usedFootballers = room.footballer ? [room.footballer] : [];
+      nextFootballers = FOOTBALLERS.filter((name) => !room.usedFootballers.includes(name));
+    }
     room.footballer = nextFootballers[randomInt(nextFootballers.length)];
+    room.usedFootballers.push(room.footballer);
   }
   if (newGame) {
     for (const player of allPlayers(room)) player.eliminated = !player.connected;
@@ -289,7 +295,7 @@ io.on('connection', (socket) => {
     const playerName = cleanName(name);
     if (!playerName) return done({ error: 'Enter your name first.' });
     const code = makeCode();
-    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, result: null, speakingOrder: [], speakerIndex: 0, imposterIds: [], imposterRoster: [], imposterCount: 1, imposterCanStartFirst: false, voteRound: 0 };
+    const room = { code, phase: 'lobby', hostId: socket.id, players: new Map(), votes: new Map(), footballer: null, usedFootballers: [], result: null, speakingOrder: [], speakerIndex: 0, imposterIds: [], imposterRoster: [], imposterCount: 1, imposterCanStartFirst: false, voteRound: 0 };
     room.players.set(socket.id, { id: socket.id, name: playerName, connected: true, eliminated: false });
     rooms.set(code, room);
     socket.join(code);
@@ -333,15 +339,16 @@ io.on('connection', (socket) => {
 
   socket.on('game:next-speaker', () => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
-    if (!room || room.hostId !== socket.id || room.phase !== 'hints') return;
+    if (!room || room.phase !== 'hints' || (room.hostId !== socket.id && room.speakingOrder[room.speakerIndex] !== socket.id)) return;
     advanceSpeaker(room);
   });
 
-  socket.on('game:vote', ({ targetId } = {}) => {
+  socket.on('game:vote', ({ targetId, abstain = false } = {}) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
-    if (!room || !['voting', 'revote'].includes(room.phase) || Date.now() >= room.voteDeadline || room.players.get(socket.id)?.eliminated || targetId === socket.id || room.players.get(targetId)?.eliminated || !room.players.has(targetId) || room.votes.has(socket.id)) return;
-    if (room.phase === 'revote' && !room.voteCandidates?.includes(targetId)) return;
-    room.votes.set(socket.id, targetId);
+    if (!room || !['voting', 'revote'].includes(room.phase) || Date.now() >= room.voteDeadline || room.players.get(socket.id)?.eliminated || room.votes.has(socket.id)) return;
+    if (!abstain && (targetId === socket.id || room.players.get(targetId)?.eliminated || !room.players.has(targetId))) return;
+    if (!abstain && room.phase === 'revote' && !room.voteCandidates?.includes(targetId)) return;
+    room.votes.set(socket.id, abstain ? null : targetId);
     io.to(socket.id).emit('vote:confirmed');
     if (room.votes.size === players(room).length) resolveVote(room);
     else sendRoom(room);
