@@ -101,8 +101,8 @@ const beginVoting = (room, phase = 'voting', candidates = null, tieVotes = null)
   room.tieVotes = tieVotes;
   room.votes.clear();
   room.voteRound = (room.voteRound || 0) + 1;
-  room.voteDeadline = Date.now() + 30_000;
-  room.voteTimer = setTimeout(() => resolveVote(room, true), 30_000);
+  room.voteDeadline = phase === 'revote' ? null : Date.now() + 30_000;
+  room.voteTimer = phase === 'revote' ? null : setTimeout(() => resolveVote(room, true), 30_000);
 };
 const resolveVote = (room, timedOut = false) => {
   if (!['voting', 'revote'].includes(room.phase)) return;
@@ -345,7 +345,7 @@ io.on('connection', (socket) => {
 
   socket.on('game:vote', ({ targetId, abstain = false } = {}) => {
     const room = [...rooms.values()].find((candidate) => candidate.players.has(socket.id));
-    if (!room || !['voting', 'revote'].includes(room.phase) || Date.now() >= room.voteDeadline || room.players.get(socket.id)?.eliminated || room.votes.has(socket.id)) return;
+    if (!room || !['voting', 'revote'].includes(room.phase) || (room.voteDeadline && Date.now() >= room.voteDeadline) || room.players.get(socket.id)?.eliminated || room.votes.has(socket.id)) return;
     if (!abstain && (targetId === socket.id || room.players.get(targetId)?.eliminated || !room.players.has(targetId))) return;
     if (!abstain && room.phase === 'revote' && !room.voteCandidates?.includes(targetId)) return;
     room.votes.set(socket.id, abstain ? null : targetId);
